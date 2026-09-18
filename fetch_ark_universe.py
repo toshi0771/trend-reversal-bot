@@ -151,6 +151,27 @@ def cusips_to_tickers(cusips: list[str], batch_size: int | None = None) -> dict[
     if OPENFIGI_API_KEY:
         headers["X-OPENFIGI-APIKEY"] = OPENFIGI_API_KEY
 
+    # OpenFIGIの exchCode のうち、日本の証券会社でも通常取引できる
+    # 「正規の米国取引所」のみを対象にする。
+    #
+    # 重要: exchCode == "US" は「複合(composite)コード」であり、
+    # NYSE/Nasdaqの正規上場だけでなく OTC Pink Sheets 等の店頭銘柄にも
+    # 同じ "US" が付与されることがあるため、あえて対象から外す。
+    # 同様に OTC/ダークプール系コード(UU, UV, PQ, UD, UE, UJ, UT)も除外。
+    US_EXCH_PRIORITY = [
+        "UN",  # NYSE
+        "UW",  # Nasdaq Global Select Market
+        "UQ",  # Nasdaq Global Market
+        "UR",  # Nasdaq Capital Market
+        "UA",  # NYSE American
+        "UP",  # NYSE Arca
+        "UF",  # Cboe BZX Exchange
+        "UM",  # NYSE Chicago
+        "UC",  # NYSE National
+        "UB",  # Nasdaq BX
+        "UO",  # CBOE Stock Exchange
+    ]
+
     result: dict[str, dict] = {}
 
     for i in range(0, len(cusips), batch_size):
@@ -170,12 +191,30 @@ def cusips_to_tickers(cusips: list[str], batch_size: int | None = None) -> dict[
             if "data" not in resp or not resp["data"]:
                 print(f"[WARN] マッピング失敗: {cusip}")
                 continue
-            top = resp["data"][0]
+
+            candidates = resp["data"]
+
+            # 米国取引所コードの優先順位に従って最良の候補を選ぶ
+            best = None
+            for exch in US_EXCH_PRIORITY:
+                for c in candidates:
+                    if c.get("exchCode") == exch:
+                        best = c
+                        break
+                if best:
+                    break
+
+            if best is None:
+                # 米国上場が見つからない場合はスキップ(誤った海外ティッカーを使わない)
+                print(f"[SKIP] 米国上場が見つかりません: {cusip} "
+                      f"(候補: {[c.get('exchCode') for c in candidates]})")
+                continue
+
             result[cusip] = {
-                "ticker": top.get("ticker"),
-                "name": top.get("name"),
-                "securityType": top.get("securityType"),
-                "exchCode": top.get("exchCode"),
+                "ticker": best.get("ticker"),
+                "name": best.get("name"),
+                "securityType": best.get("securityType"),
+                "exchCode": best.get("exchCode"),
             }
 
         # 無料枠のレート制限対策(APIキーなしの場合は特に)
